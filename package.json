@@ -5,8 +5,8 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "mcp-readedit": "./index.js",
-    "readedit": "./readedit.js"
+    "mcp-readedit": "index.js",
+    "readedit": "readedit.js"
   },
   "files": [
     "index.js",
@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "test": "node --test 'test/**/*.test.js'"
+    "test": "node --test test/readedit.test.js test/multi-edit.test.js test/multi-read-edit.test.js test/tracker.test.js"
   },
   "keywords": [
     "mcp",
@@ -41,7 +41,7 @@
   "author": "Abner Soares Alves Junior",
   "repository": {
     "type": "git",
-    "url": "https://github.com/abnersajr/mcp-readedit.git"
+    "url": "git+https://github.com/abnersajr/mcp-readedit.git"
   },
   "bugs": {
     "url": "https://github.com/abnersajr/mcp-readedit/issues"
