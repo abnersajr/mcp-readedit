@@ -1,0 +1,9 @@
+node_modules/
+gain.db
+*.db
+.DS_Store
+.env
+dist/
+test/fixtures/tmp/
+.claude/
+.hermes/
