@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs/promises";
+import fs from "fs";
 import os from "os";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,9 +25,9 @@ const DB_PATH = path.join(getDataDir(), "gain.db");
 
 class ReadEditTracker {
   constructor() {
-    // Ensure directory exists
+    // Ensure directory exists synchronously — better-sqlite3 requires it at open time
     const dbDir = path.dirname(DB_PATH);
-    fs.mkdir(dbDir, { recursive: true }).catch(() => {});
+    fs.mkdirSync(dbDir, { recursive: true });
 
     this.db = new Database(DB_PATH);
     this.initDB();

@@ -1,6 +1,6 @@
 {
   "name": "mcp-readedit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server that combines Read+Edit operations into single tool calls — 80-95% fewer tool calls for multi-file refactoring",
   "type": "module",
   "main": "index.js",
