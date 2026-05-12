@@ -217,6 +217,31 @@ readedit gain --reset          # Reset statistics
 
 Works with npx too: `npx mcp-readedit` starts the server, `readedit gain` runs the CLI.
 
+## AGENTS.md / CLAUDE.md Integration
+
+Add these instructions to your project's `CLAUDE.md`, `AGENTS.md`, or `.cursorrules` to make your AI coding assistant automatically use ReadEdit tools:
+
+```markdown
+## File Operations — MCP ReadEdit
+
+When reading or editing files, ALWAYS prefer MCP ReadEdit tools over separate Read + Edit calls.
+
+### Tool Selection
+- **multi_read_edit**: Read and/or edit multiple files (most common — use for any multi-file task)
+- **multi_edit**: Edit multiple files when you already have their contents
+- **read_edit**: Single file read-only or read+edit
+- **get_gain**: Check token savings statistics
+
+### Rules
+1. NEVER use separate Read then Edit calls when ReadEdit tools are available
+2. Batch file operations: group related files into a single multi_read_edit call
+3. Use `use_regex: true` for pattern-based replacements
+4. Read-only operations in multi_read_edit always return file content — no need to separately read files first
+5. When refactoring across multiple files, plan all edits first, then execute in one multi_read_edit call
+```
+
+For global usage (all projects), add to `~/.claude/AGENTS.md` instead.
+
 ## Contributing
 
 ```bash
