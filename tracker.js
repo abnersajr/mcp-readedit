@@ -7,6 +7,8 @@ import os from "os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const TRACKING_ENABLED = process.env.READEDIT_TRACK === "true";
+
 function getDataDir() {
   const home = os.homedir();
   if (process.platform === "darwin") {
@@ -25,6 +27,11 @@ const DB_PATH = path.join(getDataDir(), "gain.db");
 
 class ReadEditTracker {
   constructor() {
+    if (!TRACKING_ENABLED) {
+      this.db = null;
+      return;
+    }
+
     // Ensure directory exists synchronously — better-sqlite3 requires it at open time
     const dbDir = path.dirname(DB_PATH);
     fs.mkdirSync(dbDir, { recursive: true });
@@ -62,6 +69,8 @@ class ReadEditTracker {
    * @param {string} projectPath - Current working directory
    */
   record(toolName, filesCount, standardCalls, optimizedCalls, projectPath = null) {
+    if (!this.db) return 0;
+
     // Estimate tokens: ~200 tokens per tool call overhead (JSON formatting, tool result wrapper, etc.)
     const TOKENS_PER_CALL = 200;
     const estimatedTokensSaved = (standardCalls - optimizedCalls) * TOKENS_PER_CALL;
@@ -80,6 +89,8 @@ class ReadEditTracker {
    * Get summary statistics
    */
   getSummary() {
+    if (!this.db) return { total_operations: 0, total_files: 0, total_standard_calls: 0, total_optimized_calls: 0, total_tokens_saved: 0, calls_saved: 0, savings_pct: "0", by_tool: [] };
+
     const stmt = this.db.prepare(`
       SELECT 
         COUNT(*) as total_operations,
@@ -124,6 +135,8 @@ class ReadEditTracker {
    * Get daily breakdown
    */
   getDaily() {
+    if (!this.db) return [];
+
     const stmt = this.db.prepare(`
       SELECT 
         DATE(timestamp) as day,
@@ -145,6 +158,8 @@ class ReadEditTracker {
    * Get recent operations
    */
   getRecent(limit = 10) {
+    if (!this.db) return [];
+
     const stmt = this.db.prepare(`
       SELECT 
         timestamp,
@@ -165,12 +180,14 @@ class ReadEditTracker {
    * Reset all statistics
    */
   reset() {
+    if (!this.db) return false;
+
     this.db.exec("DELETE FROM operations");
     return true;
   }
 
   close() {
-    this.db.close();
+    if (this.db) this.db.close();
   }
 }
 

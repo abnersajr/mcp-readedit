@@ -9,6 +9,13 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import tracker from "./tracker.js";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const { version } = require("./package.json");
+
+// Configurable limits via env vars
+const MAX_FILES = parseInt(process.env.READEDIT_MAX_FILES) || 20;
+const MAX_TOTAL_BYTES = parseInt(process.env.READEDIT_MAX_BYTES) || 2 * 1024 * 1024; // 2MB default
 
 // ── Logger ──────────────────────────────────────────────────────────────
 // All output goes to stderr (stdout is reserved for MCP JSON-RPC transport).
@@ -43,7 +50,7 @@ const __dirname = path.dirname(__filename);
 const server = new Server(
   {
     name: "mcp-readedit",
-    version: "1.0.0",
+    version,
   },
   {
     capabilities: {
@@ -59,7 +66,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "read_edit",
         description:
-          "Read a file and optionally edit it in one operation. Returns file content to Claude. Supports exact string or regex replacement.",
+          "Read a file and optionally edit it in one call. For single-file tasks, use this instead of separate read_file + edit calls. Returns file content. Edit params (old_string, new_string) are optional — omit them for read-only.",
         inputSchema: {
           type: "object",
           properties: {
@@ -100,7 +107,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "multi_edit",
         description:
-          "Edit multiple files in one operation. Each edit can use exact string or regex replacement.",
+          "Edit multiple files when you already have their contents in context. ALWAYS use this instead of multiple separate edit calls. Each edit uses exact string or regex replacement. For read+edit combos, use multi_read_edit instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -142,7 +149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "multi_read_edit",
         description:
-          "Read multiple files and optionally edit them in one operation. Returns full content for read-only operations. Edit operations return compact results by default (no file content) to save tokens. Use include_content/include_original flags to opt into full content when needed.",
+          "Read and optionally edit multiple files in one call. ALWAYS batch multi-file operations here instead of separate read_file/edit calls. Read-only ops return file content. Edit ops return compact results by default (no content) to save tokens — set include_content=true to get post-edit content, include_original=true for diffing.",
         inputSchema: {
           type: "object",
           properties: {
@@ -199,27 +206,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["operations"],
         },
       },
-      {
-        name: "get_gain",
-        description:
-          "Show token savings statistics from using optimized ReadEdit tools vs standard Read+Edit calls.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            breakdown: {
-              type: "string",
-              enum: ["summary", "daily", "recent", "all"],
-              description: "Type of breakdown to show",
-              default: "summary",
-            },
-            limit: {
-              type: "number",
-              description: "Number of recent operations to show (for 'recent' breakdown)",
-              default: 10,
-            },
-          },
-        },
-      },
+
     ],
   };
 });
@@ -238,8 +225,19 @@ async function readFile(filePath, offset, limit) {
   return content;
 }
 
+// Helper: Error response
+function errorResponse(message) {
+  return {
+    content: [{ type: "text", text: JSON.stringify({ error: message }, null, 2) }],
+    isError: true,
+  };
+}
+
 // Helper: Apply edit to content
 function applyEdit(content, oldString, newString, useRegex, replaceAll) {
+  if (oldString === "") {
+    throw new Error("old_string cannot be empty. Provide non-empty text to replace, or omit old_string/new_string for read-only operations.");
+  }
   if (useRegex) {
     const flags = replaceAll ? "g" : "";
     const regex = new RegExp(oldString, flags);
@@ -325,7 +323,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 content: finalContent,
                 original_content: edited ? originalContent : undefined,
                 edited,
-                tokens_saved: tokensSaved,
                 message: edited
                   ? "File read and edited successfully"
                   : "File read successfully",
@@ -343,6 +340,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const results = [];
       const projectPath = process.cwd();
 
+      if (edits.length > MAX_FILES) {
+        return errorResponse(`Too many files (${edits.length}). Max is ${MAX_FILES}. Split into multiple calls.`);
+      }
+
       // Calculate standard calls: each file needs 1 Read + 1 Edit
       const standardCalls = edits.length * 2;
 
@@ -354,8 +355,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         grouped.get(key).push(edit);
       }
 
+      // Phase 1: Read + validate all edits in memory
+      const plans = [];
       for (const [filePath, fileEdits] of grouped) {
         let content = await fs.readFile(filePath, "utf8");
+        const original = content;
 
         for (const edit of fileEdits) {
           const {
@@ -368,13 +372,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content = applyEdit(content, old_string, new_string, use_regex, replace_all);
         }
 
-        await fs.writeFile(filePath, content, "utf8");
+        plans.push({ filePath, original, modified: content, fileEdits });
+      }
+
+      // Phase 2: Write all (only if all validations passed)
+      for (const plan of plans) {
+        await fs.writeFile(plan.filePath, plan.modified, "utf8");
 
         results.push({
-          file_path: filePath,
-          edits_applied: fileEdits.length,
+          file_path: plan.filePath,
+          edits_applied: plan.fileEdits.length,
           edited: true,
-          message: `Applied ${fileEdits.length} edit(s)`,
+          message: `Applied ${plan.fileEdits.length} edit(s)`,
         });
       }
 
@@ -387,21 +396,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectPath
       );
 
+      const regexReplaces = edits.filter(e => e.use_regex && e.replace_all);
+      const warnings = [];
+      if (regexReplaces.length > 0) {
+        warnings.push(`Warning: ${regexReplaces.length} edit(s) used replace_all with regex. Verify pattern matches only intended targets.`);
+      }
+
+      const response = {
+        edited_files: results.length,
+        total_edits: edits.length,
+        results,
+        message: `Successfully edited ${results.length} files (${edits.length} total edits)`,
+      };
+      if (warnings.length > 0) response.warnings = warnings;
+
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              {
-                edited_files: results.length,
-                total_edits: edits.length,
-                results,
-                tokens_saved: tokensSaved,
-                message: `Successfully edited ${results.length} files (${edits.length} total edits)`,
-              },
-              null,
-              2
-            ),
+            text: JSON.stringify(response, null, 2),
           },
         ],
       };
@@ -411,6 +424,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { operations, include_content = false, include_original = false } = args;
       const results = [];
       const projectPath = process.cwd();
+
+      if (operations.length > MAX_FILES) {
+        return errorResponse(`Too many files (${operations.length}). Max is ${MAX_FILES}. Split into multiple calls.`);
+      }
 
       // Calculate standard calls: each file needs 1 Read + (edit ? 1 Edit : 0)
       let standardCalls = 0;
@@ -429,14 +446,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         grouped.get(key).push(op);
       }
 
+      // Phase 1: Read + validate all edits in memory
+      const plans = [];
       for (const [filePath, fileOps] of grouped) {
-        // Read once for all ops on this file
         const firstOp = fileOps[0];
         const originalContent = await readFile(filePath, firstOp.offset, firstOp.limit);
         let content = originalContent;
         let editsApplied = 0;
 
-        // Apply edits sequentially in-memory
         for (const op of fileOps) {
           if (op.old_string !== undefined && op.new_string !== undefined) {
             content = applyEdit(
@@ -450,25 +467,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        // Write once after all edits
-        if (editsApplied > 0) {
-          await fs.writeFile(filePath, content, "utf8");
+        plans.push({ filePath, originalContent, modified: content, editsApplied, fileOps });
+      }
+
+      // Phase 2: Write only after all validations pass, then build results
+      for (const plan of plans) {
+        if (plan.editsApplied > 0) {
+          await fs.writeFile(plan.filePath, plan.modified, "utf8");
         }
 
-        // Build result: read-only gets full content, edits get compact by default
         const result = {
-          file_path: filePath,
-          edits_applied: editsApplied,
-          read_only: editsApplied === 0,
+          file_path: plan.filePath,
+          edits_applied: plan.editsApplied,
+          read_only: plan.editsApplied === 0,
         };
 
-        if (editsApplied === 0) {
-          // Read-only: always return content (agent needs it to understand code)
-          result.content = content;
+        if (plan.editsApplied === 0) {
+          result.content = plan.modified;
         } else {
-          // Edit: compact by default, opt-in to full content
-          if (include_content) result.content = content;
-          if (include_original) result.original_content = originalContent;
+          if (include_content) result.content = plan.modified;
+          if (include_original) result.original_content = plan.originalContent;
         }
 
         results.push(result);
@@ -483,87 +501,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectPath
       );
 
+      const editOps = operations.filter(op => op.old_string !== undefined && op.new_string !== undefined);
+      const regexReplaces = editOps.filter(e => e.use_regex && e.replace_all);
+      const warnings = [];
+      if (regexReplaces.length > 0) {
+        warnings.push(`Warning: ${regexReplaces.length} edit(s) used replace_all with regex. Verify pattern matches only intended targets.`);
+      }
+
+      const response = {
+        files_processed: results.length,
+        results,
+        message: `Processed ${results.length} files`,
+      };
+      if (warnings.length > 0) response.warnings = warnings;
+
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              {
-                files_processed: results.length,
-                results,
-                message: `Processed ${results.length} files`,
-                tokens_saved: tokensSaved,
-              },
-              null,
-              2
-            ),
+            text: JSON.stringify(response, null, 2),
           },
         ],
       };
-    }
-
-    if (name === "get_gain") {
-      const { breakdown = "summary", limit = 10 } = args;
-
-      if (breakdown === "summary" || breakdown === "all") {
-        const summary = tracker.getSummary();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  type: "summary",
-                  data: summary,
-                  message: `Total tokens saved: ${summary.total_tokens_saved} (${summary.savings_pct}% reduction)`,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      if (breakdown === "daily") {
-        const daily = tracker.getDaily();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  type: "daily",
-                  data: daily,
-                  message: `Showing ${daily.length} days of data`,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      if (breakdown === "recent") {
-        const recent = tracker.getRecent(limit);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  type: "recent",
-                  data: recent,
-                  message: `Last ${recent.length} operations`,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
     }
 
     throw new Error(`Unknown tool: ${name}`);

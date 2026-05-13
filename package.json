@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "test": "node --test test/readedit.test.js test/multi-edit.test.js test/multi-read-edit.test.js test/tracker.test.js"
+    "test": "READEDIT_TRACK=true node --test test/readedit.test.js test/multi-edit.test.js test/multi-read-edit.test.js test/tracker.test.js"
   },
   "keywords": [
     "mcp",
