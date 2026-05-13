@@ -8,6 +8,10 @@
 
 An [MCP](https://modelcontextprotocol.io) server that gives any AI coding assistant batch file operations. Instead of separate Read → Edit calls per file, do it all in one shot.
 
+## Requirements
+
+- **Node.js 20+** (recommended: latest LTS)
+
 ## Quick Start
 
 No install needed — run directly with npx:
