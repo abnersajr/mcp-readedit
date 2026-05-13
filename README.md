@@ -4,6 +4,12 @@
 [![CI](https://github.com/abnersajr/mcp-readedit/actions/workflows/ci.yml/badge.svg)](https://github.com/abnersajr/mcp-readedit/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Why?
+
+Every time an AI coding assistant edits a file, it normally needs **two tool calls**: one to **Read** the file, then one to **Edit** it. Refactoring across 5 files? That's 10 calls. Refactoring across 20? That's 40 calls — each one burning tokens on JSON overhead, waiting for round-trips, and filling up context.
+
+**MCP ReadEdit** collapses those pairs into single calls. Read+Edit in one shot. Batch edits across many files in one call. The result: **80–95% fewer tool calls**, faster completions, and significantly lower token usage.
+
 **Combine Read+Edit into single tool calls — 80-95% fewer tool calls for multi-file refactoring.**
 
 An [MCP](https://modelcontextprotocol.io) server that gives any AI coding assistant batch file operations. Instead of separate Read → Edit calls per file, do it all in one shot.
