@@ -13,6 +13,29 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { version } = require("./package.json");
 
+// Handle --version / -V and --help / -h before starting MCP server
+const cliArgs = process.argv.slice(2);
+if (cliArgs.includes("--version") || cliArgs.includes("-V")) {
+  console.log(`mcp-readedit v${version}`);
+  process.exit(0);
+}
+if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+  console.log(`mcp-readedit v${version}
+
+MCP server that combines Read+Edit operations into single tool calls.
+
+Usage:
+  mcp-readedit              Start the MCP server (stdio transport)
+  mcp-readedit --version    Show version
+  mcp-readedit --help       Show this help
+
+Environment variables:
+  READEDIT_MAX_FILES    Max files per batch call (default: 20)
+  READEDIT_MAX_BYTES    Max total bytes per batch call (default: 2MB)
+`);
+  process.exit(0);
+}
+
 // Configurable limits via env vars
 const MAX_FILES = parseInt(process.env.READEDIT_MAX_FILES) || 20;
 const MAX_TOTAL_BYTES = parseInt(process.env.READEDIT_MAX_BYTES) || 2 * 1024 * 1024; // 2MB default
